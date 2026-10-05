@@ -1,0 +1,2109 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>ChronoSync BLE - 128x128 Smartwatch Screen Mirroring</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        cyber: {
+                            bg: '#0a0d14',
+                            surface: '#111726',
+                            card: '#161f36',
+                            border: '#233252',
+                            primary: '#00f0ff',
+                            primaryDark: '#00a3ad',
+                            secondary: '#7928ca',
+                            accent: '#00ff66',
+                            warn: '#ffb703',
+                            danger: '#ff0055',
+                            text: '#f1f5f9',
+                            muted: '#8b9bb4'
+                        }
+                    },
+                    fontFamily: {
+                        mono: ['"JetBrains Mono"', 'monospace'],
+                        display: ['"Chakra Petch"', 'sans-serif'],
+                        sans: ['"Inter"', 'sans-serif']
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        /* Custom scrollbar */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: #0a0d14; }
+        ::-webkit-scrollbar-thumb { background: #233252; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: #00f0ff; }
+
+        .crt-scanlines {
+            background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.4) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.03), rgba(0, 255, 0, 0.01), rgba(0, 0, 255, 0.03));
+            background-size: 100% 2px, 3px 100%;
+            pointer-events: none;
+        }
+
+        .lcd-pixel-grid {
+            background-size: 4px 4px;
+            background-image: 
+                linear-gradient(to right, rgba(0, 0, 0, 0.35) 1px, transparent 1px),
+                linear-gradient(to bottom, rgba(0, 0, 0, 0.35) 1px, transparent 1px);
+        }
+
+        .cyber-glow {
+            box-shadow: 0 0 15px rgba(0, 240, 255, 0.25);
+        }
+        
+        .cyber-glow-success {
+            box-shadow: 0 0 15px rgba(0, 255, 102, 0.25);
+        }
+
+        /* Matrix rain / HUD scan animation */
+        @keyframes pulseGlow {
+            0%, 100% { opacity: 0.6; }
+            50% { opacity: 1; }
+        }
+        .pulse-beacon {
+            animation: pulseGlow 1.8s infinite;
+        }
+    </style>
+</head>
+<body class="bg-cyber-bg text-cyber-text font-sans min-h-screen flex flex-col selection:bg-cyber-primary selection:text-black">
+
+    <header class="border-b border-cyber-border bg-cyber-surface/90 backdrop-blur sticky top-0 z-50 px-4 py-3">
+        <div class="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-3">
+            <div class="flex items-center gap-3">
+                <div class="w-9 h-9 rounded-lg bg-cyber-primary/10 border border-cyber-primary/40 flex items-center justify-center text-cyber-primary font-display font-bold text-xl shadow-lg shadow-cyber-primary/10">
+                    CS
+                </div>
+                <div>
+                    <h1 class="font-display font-bold text-lg tracking-wider text-white flex items-center gap-2">
+                        CHRONOSYNC <span class="text-cyber-primary">BLE</span>
+                        <span class="text-[10px] px-1.5 py-0.5 rounded bg-cyber-card border border-cyber-border text-cyber-muted font-mono">v1.44-BL6133</span>
+                    </h1>
+                    <p class="text-xs text-cyber-muted font-mono">128×128 RGB565 Live Mirroring Engine</p>
+                </div>
+            </div>
+
+            <!-- Pipeline Status Pill -->
+            <div class="flex items-center gap-2 text-xs font-mono bg-cyber-card/80 px-3 py-1.5 rounded-full border border-cyber-border">
+                <span id="bleStatusDot" class="w-2.5 h-2.5 rounded-full bg-cyber-danger"></span>
+                <span id="bleStatusText" class="text-cyber-muted font-medium">DISCONNECTED</span>
+                <span class="text-cyber-border">|</span>
+                <span id="streamStatusText" class="text-cyber-muted">STREAM IDLE</span>
+            </div>
+
+            <!-- View Switcher -->
+            <div class="flex items-center bg-cyber-bg p-1 rounded-lg border border-cyber-border text-xs font-medium">
+                <button id="tabAppBtn" onclick="switchTab('app')" class="px-3 py-1.5 rounded-md bg-cyber-card text-cyber-primary shadow font-mono">Console & Simulator</button>
+                <button id="tabDiagBtn" onclick="switchTab('diag')" class="px-3 py-1.5 rounded-md text-cyber-muted hover:text-white font-mono transition">GATT Diagnostic</button>
+                <button id="tabCodeBtn" onclick="switchTab('code')" class="px-3 py-1.5 rounded-md text-cyber-muted hover:text-white font-mono transition">Source Code</button>
+                <button id="tabApkBtn" onclick="switchTab('apk')" class="px-3 py-1.5 rounded-md bg-cyber-primary/20 hover:bg-cyber-primary/30 border border-cyber-primary text-cyber-primary font-mono transition flex items-center gap-1.5">
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+                    APK Build Center
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <main class="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
+
+        <!-- ================= LEFT COLUMN: CONTROLS & BLE ================= -->
+        <section class="lg:col-span-4 flex flex-col gap-5">
+            <!-- Hardware Pairing Card -->
+            <div class="bg-cyber-surface border border-cyber-border rounded-xl p-5 shadow-lg relative overflow-hidden">
+                <div class="absolute top-0 right-0 w-28 h-28 bg-cyber-primary/5 rounded-full blur-2xl pointer-events-none"></div>
+                <div class="flex items-center justify-between mb-4">
+                    <h2 class="font-display font-semibold text-sm uppercase tracking-wider text-cyber-primary flex items-center gap-2">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z"></path></svg>
+                        Target Watch BLE
+                    </h2>
+                    <span class="text-[11px] font-mono text-cyber-muted">BL6133 / GL6113</span>
+                </div>
+
+                <div class="space-y-3">
+                    <div class="p-3 bg-cyber-card rounded-lg border border-cyber-border text-xs font-mono space-y-1">
+                        <div class="flex justify-between">
+                            <span class="text-cyber-muted">Target ID:</span>
+                            <span class="text-white font-bold" id="targetDevName">RQ-BL6133 / GL6113-WR</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="text-cyber-muted">Branch / FW:</span>
+                            <span class="text-cyber-muted">11BW1308MP (V01.12)</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="text-cyber-muted">Negotiated MTU:</span>
+                            <span class="text-cyber-primary font-bold" id="statMtu">23 bytes (Default)</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="text-cyber-muted">Usable Payload:</span>
+                            <span class="text-cyber-accent font-bold" id="statPayload">20 bytes</span>
+                        </div>
+                    </div>
+
+                    <!-- Connect / Scan Buttons -->
+                    <div class="grid grid-cols-2 gap-2 pt-1">
+                        <button id="btnBleScan" onclick="startBleDiscovery()" class="w-full py-2.5 px-3 rounded-lg bg-cyber-card hover:bg-cyber-border border border-cyber-border hover:border-cyber-primary text-white text-xs font-mono font-medium transition flex items-center justify-center gap-2">
+                            <svg class="w-4 h-4 text-cyber-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+                            Scan Hardware
+                        </button>
+                        <button id="btnLoopbackSim" onclick="toggleVirtualBleWatch()" class="w-full py-2.5 px-3 rounded-lg bg-cyber-primary/20 hover:bg-cyber-primary/30 border border-cyber-primary text-cyber-primary text-xs font-mono font-semibold transition flex items-center justify-center gap-2">
+                            <span class="w-2 h-2 rounded-full bg-cyber-primary pulse-beacon"></span>
+                            Virtual BLE
+                        </button>
+                    </div>
+
+                    <div id="bleSupportNotice" class="hidden text-[11px] p-2 rounded bg-cyber-warn/10 border border-cyber-warn/30 text-cyber-warn font-mono">
+                        Note: Web Bluetooth is supported in Chrome/Edge on Android and Desktop. Use "Virtual BLE" to simulate loopback anytime.
+                    </div>
+                </div>
+            </div>
+
+            <div class="bg-cyber-surface border border-cyber-border rounded-xl p-5 shadow-lg space-y-4">
+                <h2 class="font-display font-semibold text-sm uppercase tracking-wider text-cyber-primary flex items-center gap-2">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
+                    Screen Capture Engine
+                </h2>
+
+                <div class="space-y-3 text-xs">
+                    <!-- FPS selector -->
+                    <div>
+                        <div class="flex justify-between mb-1.5 font-mono">
+                            <span class="text-cyber-muted">Frame Rate Target:</span>
+                            <span class="text-cyber-primary font-bold" id="fpsLabel">3 FPS</span>
+                        </div>
+                        <div class="grid grid-cols-5 gap-1.5 font-mono">
+                            <button onclick="setTargetFps(1)" class="fps-btn py-1.5 rounded bg-cyber-card border border-cyber-border hover:border-cyber-primary">1</button>
+                            <button onclick="setTargetFps(2)" class="fps-btn py-1.5 rounded bg-cyber-card border border-cyber-border hover:border-cyber-primary">2</button>
+                            <button onclick="setTargetFps(3)" class="fps-btn active py-1.5 rounded bg-cyber-primary text-black font-bold">3</button>
+                            <button onclick="setTargetFps(5)" class="fps-btn py-1.5 rounded bg-cyber-card border border-cyber-border hover:border-cyber-primary">5</button>
+                            <button onclick="setTargetFps(10)" class="fps-btn py-1.5 rounded bg-cyber-card border border-cyber-border hover:border-cyber-primary">10</button>
+                        </div>
+                        <p class="text-[10px] text-cyber-muted mt-1">Default 3 FPS matches BL6133 1.44" BLE throughput ceiling.</p>
+                    </div>
+
+                    <!-- Scaling Mode -->
+                    <div>
+                        <label class="block text-cyber-muted font-mono mb-1.5">Scaling Algorithm:</label>
+                        <div class="grid grid-cols-2 gap-2 font-mono">
+                            <button id="btnScaleCrop" onclick="setScalingMode('crop')" class="py-2 px-3 rounded-lg bg-cyber-primary text-black font-bold text-center border border-cyber-primary">
+                                Center Crop
+                            </button>
+                            <button id="btnScaleFit" onclick="setScalingMode('fit')" class="py-2 px-3 rounded-lg bg-cyber-card text-cyber-muted hover:text-white font-medium text-center border border-cyber-border">
+                                Fit Letterbox
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Test Source or Live Screen -->
+                    <div>
+                        <label class="block text-cyber-muted font-mono mb-1.5">Screen Source:</label>
+                        <div class="grid grid-cols-2 gap-2 font-mono">
+                            <button id="btnStartLiveCapture" onclick="startLiveScreenCapture()" class="py-2.5 px-3 rounded-lg bg-cyber-accent hover:bg-emerald-400 text-black font-bold text-center transition flex items-center justify-center gap-1.5 shadow-lg shadow-cyber-accent/20">
+                                <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clip-rule="evenodd"></path></svg>
+                                Capture Screen
+                            </button>
+                            <button id="btnDemoSource" onclick="toggleDemoSignal()" class="py-2.5 px-3 rounded-lg bg-cyber-card hover:bg-cyber-border border border-cyber-border text-white font-medium text-center transition">
+                                Test Pattern
+                            </button>
+                        </div>
+                    </div>
+
+                    <button id="btnStopStream" onclick="stopScreenStream()" class="w-full py-2 rounded-lg bg-cyber-danger/10 hover:bg-cyber-danger/20 border border-cyber-danger/40 text-cyber-danger font-mono text-xs font-semibold transition hidden">
+                        Stop Active Stream
+                    </button>
+                </div>
+            </div>
+
+            <div class="bg-cyber-surface border border-cyber-border rounded-xl p-5 shadow-lg">
+                <h2 class="font-display font-semibold text-sm uppercase tracking-wider text-cyber-primary flex items-center justify-between mb-3">
+                    <span>Delta Compression Engine</span>
+                    <span class="text-[11px] font-mono text-cyber-accent font-bold" id="savingsBadge">89.4% SAVED</span>
+                </h2>
+                <div class="grid grid-cols-2 gap-3 text-xs font-mono">
+                    <div class="bg-cyber-card p-2.5 rounded-lg border border-cyber-border">
+                        <div class="text-cyber-muted text-[10px]">DIRTY TILES (8×8)</div>
+                        <div class="text-lg font-bold text-white mt-0.5" id="statDirtyTiles">0 / 64</div>
+                        <div class="text-[10px] text-cyber-primary" id="statDirtyPercent">0% changed</div>
+                    </div>
+                    <div class="bg-cyber-card p-2.5 rounded-lg border border-cyber-border">
+                        <div class="text-cyber-muted text-[10px]">FRAME SIZE</div>
+                        <div class="text-lg font-bold text-white mt-0.5" id="statFrameBytes">0 B</div>
+                        <div class="text-[10px] text-cyber-muted">Full: 32,768 B</div>
+                    </div>
+                    <div class="bg-cyber-card p-2.5 rounded-lg border border-cyber-border">
+                        <div class="text-cyber-muted text-[10px]">BLE BITRATE</div>
+                        <div class="text-lg font-bold text-cyber-primary mt-0.5" id="statBitrate">0.0 kbps</div>
+                        <div class="text-[10px] text-cyber-muted" id="statPacketsSec">0 pkts/s</div>
+                    </div>
+                    <div class="bg-cyber-card p-2.5 rounded-lg border border-cyber-border">
+                        <div class="text-cyber-muted text-[10px]">QUEUE & BACKPRESSURE</div>
+                        <div class="text-lg font-bold text-cyber-accent mt-0.5" id="statQueueSize">0 pkts</div>
+                        <div class="text-[10px] text-cyber-muted" id="statDropCount">Drops: 0</div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ================= CENTER COLUMN: HARDWARE WATCH SIMULATOR ================= -->
+        <section class="lg:col-span-5 flex flex-col items-center justify-start gap-4">
+            
+            <!-- Real Watch Simulator Enclosure -->
+            <div class="w-full max-w-[380px] bg-cyber-surface border border-cyber-border rounded-2xl p-6 shadow-2xl flex flex-col items-center relative">
+                <!-- Watch Bezel / Housing -->
+                <div class="text-center mb-3">
+                    <span class="text-xs font-mono tracking-widest text-cyber-muted uppercase">1.44" TFT LCD • MediaTek BL6133</span>
+                </div>
+
+                <!-- Circular/Squircle Watch Chassis -->
+                <div class="relative w-[280px] h-[280px] bg-[#1a1c23] rounded-[48px] border-4 border-[#2b3040] shadow-2xl flex items-center justify-center p-4">
+                    <!-- Metal bevel rim -->
+                    <div class="w-full h-full rounded-[40px] bg-[#0c0e14] border-2 border-[#3d445c] flex flex-col items-center justify-center p-3 relative overflow-hidden shadow-inner">
+                        
+                        <!-- Watch Glass Sheen Reflection -->
+                        <div class="absolute inset-0 bg-gradient-to-tr from-white/5 via-transparent to-white/10 pointer-events-none rounded-[36px] z-20"></div>
+
+                        <!-- 128x128 LCD Screen Container -->
+                        <div class="relative w-[200px] h-[200px] bg-black border border-neutral-800 rounded-sm overflow-hidden shadow-2xl flex items-center justify-center">
+                            
+                            <!-- The 128x128 Physical Hardware Canvas -->
+                            <canvas id="watchCanvas" width="128" height="128" class="w-full h-full image-rendering-pixelated bg-black"></canvas>
+                            
+                            <!-- Optional CRT/LCD Scanline & Pixel Grid Overlay -->
+                            <div id="lcdGridOverlay" class="absolute inset-0 lcd-pixel-grid pointer-events-none opacity-40 z-10"></div>
+                            <div id="lcdScanOverlay" class="absolute inset-0 crt-scanlines pointer-events-none opacity-30 z-10"></div>
+                            
+                            <!-- Tile Grid Debug Overlay -->
+                            <canvas id="tileDebugCanvas" width="128" height="128" class="absolute inset-0 w-full h-full pointer-events-none z-15"></canvas>
+                        </div>
+
+                        <!-- Hardware Bezel Label -->
+                        <div class="mt-2 text-[9px] font-mono text-[#525d7a] tracking-wider font-semibold">
+                            CHRONOSYNC • GL6113-WR
+                        </div>
+                    </div>
+
+                    <!-- Watch Crown button simulation -->
+                    <div class="absolute -right-3 top-1/2 -translate-y-1/2 w-3 h-8 bg-gradient-to-r from-neutral-600 to-neutral-800 rounded-r-md border-y border-r border-neutral-500 shadow-md"></div>
+                </div>
+
+                <!-- Simulation Visual Controls -->
+                <div class="w-full flex items-center justify-between text-xs font-mono mt-4 pt-4 border-t border-cyber-border">
+                    <label class="flex items-center gap-2 cursor-pointer text-cyber-muted hover:text-white">
+                        <input type="checkbox" id="chkShowTiles" class="rounded bg-cyber-card border-cyber-border text-cyber-primary" checked>
+                        <span>Highlight 16×16 Delta Tiles</span>
+                    </label>
+                    <label class="flex items-center gap-2 cursor-pointer text-cyber-muted hover:text-white">
+                        <input type="checkbox" id="chkLcdMesh" class="rounded bg-cyber-card border-cyber-border text-cyber-primary" checked>
+                        <span>TFT Pixel Grid</span>
+                    </label>
+                </div>
+            </div>
+
+            <!-- Tile Map HUD (8x8 Grid visualization) -->
+            <div class="w-full max-w-[380px] bg-cyber-surface border border-cyber-border rounded-xl p-4 shadow-lg">
+                <div class="flex items-center justify-between mb-2">
+                    <span class="text-xs font-display font-semibold uppercase tracking-wider text-cyber-muted">64-Tile Delta Matrix</span>
+                    <span class="text-[10px] font-mono text-cyber-primary">8×8 Blocks (16×16px each)</span>
+                </div>
+                <div id="tileMatrixGrid" class="grid grid-cols-8 gap-1 p-2 bg-cyber-card rounded-lg border border-cyber-border aspect-square w-full">
+                    <!-- 64 tiles dynamically injected -->
+                </div>
+                <div class="flex justify-between items-center text-[10px] font-mono text-cyber-muted mt-2">
+                    <span class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded bg-cyber-border inline-block"></span> Unchanged (Cached)</span>
+                    <span class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded bg-cyber-accent inline-block"></span> Transmitted Tile</span>
+                </div>
+            </div>
+
+        </section>
+
+        <!-- ================= RIGHT COLUMN: LIVE STATS & HEX TERMINAL ================= -->
+        <section class="lg:col-span-3 flex flex-col gap-5">
+            <!-- Realtime Telemetry Panel -->
+            <div class="bg-cyber-surface border border-cyber-border rounded-xl p-5 shadow-lg space-y-3 font-mono text-xs">
+                <div class="flex items-center justify-between border-b border-cyber-border pb-2">
+                    <h2 class="font-display font-semibold uppercase tracking-wider text-cyber-primary text-sm">
+                        Telemetry
+                    </h2>
+                    <span class="w-2 h-2 rounded-full bg-cyber-accent pulse-beacon"></span>
+                </div>
+
+                <div class="space-y-2">
+                    <div class="flex justify-between">
+                        <span class="text-cyber-muted">FPS (Actual):</span>
+                        <span class="text-white font-bold" id="statActualFps">0.0 fps</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-cyber-muted">Packets Transmitted:</span>
+                        <span class="text-white" id="statPacketsTotal">0</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-cyber-muted">Frames Sent:</span>
+                        <span class="text-white" id="statFramesTotal">0</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-cyber-muted">Dropped Frames:</span>
+                        <span class="text-cyber-warn" id="statFramesDropped">0</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-cyber-muted">Transmission Latency:</span>
+                        <span class="text-cyber-accent" id="statLatency">~34 ms</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-cyber-muted">Bandwidth Consumed:</span>
+                        <span class="text-white" id="statTotalBytes">0 KB</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-cyber-muted">Bandwidth Saved:</span>
+                        <span class="text-cyber-accent font-bold" id="statSavedBytes">0 KB</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Binary BLE Packet Terminal -->
+            <div class="bg-cyber-surface border border-cyber-border rounded-xl p-4 shadow-lg flex-1 flex flex-col">
+                <div class="flex items-center justify-between mb-2">
+                    <span class="text-xs font-display font-semibold uppercase tracking-wider text-cyber-primary flex items-center gap-1.5">
+                        <span class="w-1.5 h-1.5 rounded-full bg-cyber-primary"></span>
+                        Raw BLE Packet Feed
+                    </span>
+                    <button onclick="clearTerminal()" class="text-[10px] font-mono text-cyber-muted hover:text-white">Clear</button>
+                </div>
+                <div id="hexTerminal" class="h-64 sm:h-80 overflow-y-auto bg-black/80 rounded-lg p-2.5 font-mono text-[10px] text-cyber-primary/90 space-y-1 border border-cyber-border">
+                    <div class="text-cyber-muted">// ChronoSync BLE Packet Stream Ready.</div>
+                    <div class="text-cyber-muted">// Format: [VER:1][FRAME:2][T_X:1][T_Y:1][SEQ:1][LEN:1][RGB565...][CRC:2]</div>
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- ================= MODAL / TAB: GATT DIAGNOSTIC MODE ================= -->
+    <div id="diagnosticView" class="max-w-7xl w-full mx-auto p-4 sm:p-6 hidden">
+        <div class="bg-cyber-surface border border-cyber-border rounded-xl p-6 shadow-xl space-y-6">
+            <div class="flex flex-wrap items-center justify-between gap-4 border-b border-cyber-border pb-4">
+                <div>
+                    <h2 class="font-display font-bold text-lg text-white">BL6133/GL6113 BLE GATT Diagnostic Inspector</h2>
+                    <p class="text-xs text-cyber-muted font-mono">Enumerate physical watch services, query MTU, inspect handles, and test safe packet writes</p>
+                </div>
+                <div class="flex items-center gap-2">
+                    <button onclick="exportDiagnosticLogs()" class="px-3 py-1.5 rounded-lg bg-cyber-card hover:bg-cyber-border border border-cyber-border text-xs font-mono text-cyber-primary">
+                        Export Diagnostic Log
+                    </button>
+                    <button onclick="switchTab('app')" class="px-3 py-1.5 rounded-lg bg-cyber-primary text-black font-mono text-xs font-bold">
+                        Back to Mirroring
+                    </button>
+                </div>
+            </div>
+
+            <!-- Manual Service & Characteristic Config -->
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div class="bg-cyber-card p-4 rounded-lg border border-cyber-border space-y-3">
+                    <h3 class="font-mono text-xs font-bold text-cyber-primary uppercase">Active GATT Endpoints</h3>
+                    <div>
+                        <label class="text-[11px] font-mono text-cyber-muted">Target Service UUID:</label>
+                        <input type="text" id="cfgServiceUuid" value="0000ffe0-0000-1000-8000-00805f9b34fb" class="w-full bg-cyber-bg border border-cyber-border rounded px-2.5 py-1.5 text-xs font-mono text-white mt-1 focus:border-cyber-primary focus:outline-none">
+                    </div>
+                    <div>
+                        <label class="text-[11px] font-mono text-cyber-muted">Target Write Characteristic UUID:</label>
+                        <input type="text" id="cfgCharUuid" value="0000ffe1-0000-1000-8000-00805f9b34fb" class="w-full bg-cyber-bg border border-cyber-border rounded px-2.5 py-1.5 text-xs font-mono text-white mt-1 focus:border-cyber-primary focus:outline-none">
+                    </div>
+                    <div class="flex gap-2 pt-1">
+                        <button onclick="applyGattConfig()" class="px-3 py-1.5 bg-cyber-primary/20 hover:bg-cyber-primary/30 border border-cyber-primary text-cyber-primary text-xs font-mono rounded">
+                            Apply Custom UUIDs
+                        </button>
+                        <button onclick="detectGattServices()" class="px-3 py-1.5 bg-cyber-card border border-cyber-border hover:border-cyber-primary text-white text-xs font-mono rounded">
+                            Auto-Discover Services
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Controlled Safe Manual Write -->
+                <div class="bg-cyber-card p-4 rounded-lg border border-cyber-border space-y-3">
+                    <h3 class="font-mono text-xs font-bold text-cyber-warn uppercase">Controlled HEX Transmit</h3>
+                    <p class="text-[11px] text-cyber-muted font-mono">Send precise test byte frames to verify watch ACK or response (Safe mode: validates format before writing).</p>
+                    <div>
+                        <label class="text-[11px] font-mono text-cyber-muted">Hex String (e.g. AA 01 00 10 FF FF):</label>
+                        <input type="text" id="manualHexInput" value="AA 01 00 00 00 04 00 1F F8 00" class="w-full bg-cyber-bg border border-cyber-border rounded px-2.5 py-1.5 text-xs font-mono text-white mt-1">
+                    </div>
+                    <button onclick="sendManualHex()" class="px-4 py-1.5 bg-cyber-warn/20 hover:bg-cyber-warn/30 border border-cyber-warn text-cyber-warn text-xs font-mono font-bold rounded">
+                        Transmit Raw Hex Packet
+                    </button>
+                </div>
+            </div>
+
+            <!-- GATT Tree View -->
+            <div class="bg-cyber-card p-4 rounded-lg border border-cyber-border space-y-2">
+                <h3 class="font-mono text-xs font-bold text-cyber-primary uppercase">Discovered GATT Services & Characteristics</h3>
+                <div id="gattTreeContainer" class="p-3 bg-cyber-bg rounded border border-cyber-border font-mono text-xs space-y-2 max-h-60 overflow-y-auto">
+                    <div class="text-cyber-muted">// Connect watch or click "Auto-Discover Services" to view descriptors.</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ================= MODAL / TAB: CODE EXPORT ================= -->
+    <div id="codeView" class="max-w-7xl w-full mx-auto p-4 sm:p-6 hidden">
+        <div class="bg-cyber-surface border border-cyber-border rounded-xl p-6 shadow-xl space-y-6">
+            <div class="flex flex-wrap items-center justify-between gap-4 border-b border-cyber-border pb-4">
+                <div>
+                    <h2 class="font-display font-bold text-lg text-white">ChronoSync BLE Native Source Package</h2>
+                    <p class="text-xs text-cyber-muted font-mono">Production Android Native Kotlin Project & MediaTek MRE C Watch Receiver</p>
+                </div>
+                <div class="flex items-center gap-2">
+                    <button onclick="copyCurrentCodeSnippet()" class="px-3 py-1.5 rounded-lg bg-cyber-primary text-black font-mono text-xs font-bold flex items-center gap-1.5">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
+                        Copy File
+                    </button>
+                    <button onclick="switchTab('app')" class="px-3 py-1.5 rounded-lg bg-cyber-card hover:bg-cyber-border border border-cyber-border text-white font-mono text-xs font-medium">
+                        Back to Mirroring
+                    </button>
+                </div>
+            </div>
+
+            <!-- Code File Tabs -->
+            <div class="flex flex-wrap gap-2 text-xs font-mono border-b border-cyber-border pb-2">
+                <button onclick="displayCodeFile('ScreenCaptureService')" class="code-tab-btn px-3 py-1.5 rounded bg-cyber-card text-cyber-primary border border-cyber-border active">ScreenCaptureService.kt</button>
+                <button onclick="displayCodeFile('TileDeltaEngine')" class="code-tab-btn px-3 py-1.5 rounded bg-cyber-card text-cyber-muted border border-cyber-border">TileDeltaEngine.kt</button>
+                <button onclick="displayCodeFile('BleMirrorManager')" class="code-tab-btn px-3 py-1.5 rounded bg-cyber-card text-cyber-muted border border-cyber-border">BleMirrorManager.kt</button>
+                <button onclick="displayCodeFile('MainActivity')" class="code-tab-btn px-3 py-1.5 rounded bg-cyber-card text-cyber-muted border border-cyber-border">MainActivity.kt</button>
+                <button onclick="displayCodeFile('MreReceiver')" class="code-tab-btn px-3 py-1.5 rounded bg-cyber-card text-cyber-muted border border-cyber-border">mre_watch_receiver.c</button>
+                <button onclick="displayCodeFile('AndroidManifest')" class="code-tab-btn px-3 py-1.5 rounded bg-cyber-card text-cyber-muted border border-cyber-border">AndroidManifest.xml</button>
+                <button onclick="displayCodeFile('BuildGradle')" class="code-tab-btn px-3 py-1.5 rounded bg-cyber-card text-cyber-muted border border-cyber-border">build.gradle.kts</button>
+            </div>
+
+            <!-- Code Display Area -->
+            <div class="relative">
+                <pre class="bg-black/90 p-4 rounded-lg border border-cyber-border font-mono text-xs text-cyber-text overflow-x-auto max-h-[500px]"><code id="codeViewerText"></code></pre>
+            </div>
+        </div>
+    </div>
+
+    <!-- ================= MODAL / TAB: APK BUILD CENTER ================= -->
+    <div id="apkView" class="max-w-7xl w-full mx-auto p-4 sm:p-6 hidden">
+        <div class="bg-cyber-surface border border-cyber-border rounded-xl p-6 shadow-xl space-y-6">
+            <div class="flex flex-wrap items-center justify-between gap-4 border-b border-cyber-border pb-4">
+                <div>
+                    <h2 class="font-display font-bold text-lg text-white flex items-center gap-2">
+                        <span>Compile & Install ChronoSync BLE APK</span>
+                        <span class="text-xs px-2 py-0.5 rounded bg-cyber-accent/20 border border-cyber-accent text-cyber-accent font-mono font-normal">Native Android 8.0 - 15</span>
+                    </h2>
+                    <p class="text-xs text-cyber-muted font-mono">Turnkey build configurations for Cloud CI/CD, Local Android Studio, and direct On-Phone compilation</p>
+                </div>
+                <div class="flex items-center gap-2">
+                    <button onclick="downloadApkProjectZip()" class="px-4 py-2 rounded-lg bg-cyber-accent hover:bg-emerald-400 text-black font-mono text-xs font-bold flex items-center gap-2 shadow-lg shadow-cyber-accent/20 transition">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+                        Download Full Project (.ZIP)
+                    </button>
+                    <button onclick="switchTab('app')" class="px-3 py-2 rounded-lg bg-cyber-card hover:bg-cyber-border border border-cyber-border text-white font-mono text-xs font-medium">
+                        Back to App
+                    </button>
+                </div>
+            </div>
+
+            <!-- Build Methods Grid -->
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-5">
+                <!-- Method 1: Cloud GitHub Actions (Zero Setup) -->
+                <div class="bg-cyber-card p-5 rounded-xl border border-cyber-border space-y-3 relative overflow-hidden flex flex-col justify-between">
+                    <div>
+                        <div class="flex items-center justify-between mb-2">
+                            <span class="text-xs font-mono font-bold text-cyber-primary uppercase tracking-wider">Method 1 (Instant)</span>
+                            <span class="text-[10px] px-2 py-0.5 rounded bg-cyber-primary/20 text-cyber-primary font-mono font-bold">Cloud CI/CD</span>
+                        </div>
+                        <h3 class="font-display font-bold text-white text-base">GitHub Actions 1-Click Cloud APK</h3>
+                        <p class="text-xs text-cyber-muted mt-2">
+                            No Android Studio or JDK needed. Push the downloaded project to a free private GitHub repository. GitHub compiles the real signed APK in 90 seconds and gives you the direct download link.
+                        </p>
+                        <div class="mt-4 p-3 bg-cyber-bg rounded border border-cyber-border text-[11px] font-mono text-cyber-text space-y-1.5">
+                            <div class="text-cyber-accent">1. Click "Download Full Project (.ZIP)"</div>
+                            <div>2. Create new repo on GitHub & push files</div>
+                            <div>3. Tab "Actions" builds APK automatically</div>
+                            <div class="text-cyber-primary font-bold">4. Download "ChronoSync-BLE-v1.0.apk"</div>
+                        </div>
+                    </div>
+                    <button onclick="displayCodeFile('GithubWorkflow'); switchTab('code')" class="w-full py-2 bg-cyber-primary/10 hover:bg-cyber-primary/20 border border-cyber-primary/40 text-cyber-primary text-xs font-mono rounded mt-3">
+                        View .github/workflows/build-apk.yml
+                    </button>
+                </div>
+
+                <!-- Method 2: Android Studio -->
+                <div class="bg-cyber-card p-5 rounded-xl border border-cyber-border space-y-3 flex flex-col justify-between">
+                    <div>
+                        <div class="flex items-center justify-between mb-2">
+                            <span class="text-xs font-mono font-bold text-cyber-accent uppercase tracking-wider">Method 2</span>
+                            <span class="text-[10px] px-2 py-0.5 rounded bg-cyber-accent/20 text-cyber-accent font-mono font-bold">Standard</span>
+                        </div>
+                        <h3 class="font-display font-bold text-white text-base">Android Studio / CLI Build</h3>
+                        <p class="text-xs text-cyber-muted mt-2">
+                            Open the unzipped directory in Android Studio (Giraffe, Hedgehog, Iguana or newer) or run the single Gradle command from your terminal:
+                        </p>
+                        <div class="mt-4 p-3 bg-cyber-bg rounded border border-cyber-border text-[11px] font-mono text-cyber-accent">
+                            <code>./gradlew assembleDebug</code>
+                            <div class="text-cyber-muted text-[10px] mt-2">Outputs: <span class="text-white">app/build/outputs/apk/debug/app-debug.apk</span></div>
+                        </div>
+                    </div>
+                    <div class="text-[11px] font-mono text-cyber-muted">
+                        Install directly via ADB:
+                        <code class="block text-cyber-text bg-cyber-bg p-1.5 rounded mt-1">adb install -r app-debug.apk</code>
+                    </div>
+                </div>
+
+                <!-- Method 3: Direct Phone Build (Termux) -->
+                <div class="bg-cyber-card p-5 rounded-xl border border-cyber-border space-y-3 flex flex-col justify-between">
+                    <div>
+                        <div class="flex items-center justify-between mb-2">
+                            <span class="text-xs font-mono font-bold text-cyber-warn uppercase tracking-wider">Method 3</span>
+                            <span class="text-[10px] px-2 py-0.5 rounded bg-cyber-warn/20 text-cyber-warn font-mono font-bold">On Android</span>
+                        </div>
+                        <h3 class="font-display font-bold text-white text-base">Compile Directly in Termux</h3>
+                        <p class="text-xs text-cyber-muted mt-2">
+                            Build the APK without a PC using Termux on your phone with OpenJDK 17:
+                        </p>
+                        <div class="mt-4 p-3 bg-cyber-bg rounded border border-cyber-border text-[10px] font-mono text-cyber-muted space-y-1 overflow-x-auto">
+                            <div class="text-cyber-text">pkg install openjdk-17 git</div>
+                            <div class="text-cyber-text">unzip ChronoSync-BLE-Android.zip</div>
+                            <div class="text-cyber-text">cd ChronoSync-BLE-Android</div>
+                            <div class="text-cyber-accent">chmod +x gradlew && ./gradlew assembleDebug</div>
+                        </div>
+                    </div>
+                    <div class="text-[10px] font-mono text-cyber-warn">
+                        Ready to install on target phone with full MediaProjection & BLE permissions.
+                    </div>
+                </div>
+            </div>
+
+            <!-- APK Package Manifest & Config Summary -->
+            <div class="p-4 bg-cyber-card rounded-lg border border-cyber-border font-mono text-xs space-y-2">
+                <div class="text-cyber-primary font-bold uppercase tracking-wider">Embedded Project Structure in Downloadable ZIP:</div>
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px] text-cyber-muted">
+                    <div>📁 app/src/main/java/com/chronosync/ble/</div>
+                    <div>├── ScreenCaptureService.kt (Foreground MediaProjection)</div>
+                    <div>├── TileDeltaEngine.kt (64-Tile Delta RGB565 Compression)</div>
+                    <div>├── BleMirrorManager.kt (GATT Queue & MTU Protocol)</div>
+                    <div>├── MainActivity.kt (Permission & UI Coordinator)</div>
+                    <div>📁 app/src/main/res/ (Layouts, strings, values)</div>
+                    <div>📁 .github/workflows/build-apk.yml (Automated APK compiler)</div>
+                    <div>📁 mre_firmware/mre_watch_receiver.c (BL6133 Watch C Receiver)</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Hidden Video and Source Canvas for Offscreen Processing -->
+    <video id="hiddenScreenVideo" playsinline autoplay muted class="hidden"></video>
+    <canvas id="offscreenCanvas" width="128" height="128" class="hidden"></canvas>
+
+    <!-- Custom Notification Toast -->
+    <div id="toastNotification" class="fixed bottom-5 right-5 bg-cyber-card border border-cyber-primary text-white text-xs font-mono px-4 py-3 rounded-lg shadow-2xl transition-all duration-300 transform translate-y-20 opacity-0 pointer-events-none z-50 flex items-center gap-2">
+        <span id="toastIcon">ℹ️</span>
+        <span id="toastMsg">ChronoSync Ready</span>
+    </div>
+
+    <script>
+        /* =========================================================================
+         * CHRONOSYNC BLE SYSTEM CORE
+         * Screen Mirroring, RGB565 Converter, Delta-Tile Engine, BLE Fragmentation
+         * ========================================================================= */
+
+        // Protocol Constants
+        const PROTOCOL_HEADER_MAGIC = 0xAA;
+        const PROTOCOL_VERSION = 0x01;
+        const LCD_WIDTH = 128;
+        const LCD_HEIGHT = 128;
+        const TILE_SIZE = 16;
+        const TILES_PER_ROW = LCD_WIDTH / TILE_SIZE; // 8
+        const TOTAL_TILES = TILES_PER_ROW * TILES_PER_ROW; // 64
+        const TILE_PIXELS = TILE_SIZE * TILE_SIZE; // 256
+        const TILE_BYTE_SIZE = TILE_PIXELS * 2; // 512 bytes in RGB565
+
+        // App & Pipeline State
+        const state = {
+            targetFps: 3,
+            scalingMode: 'crop', // 'crop' | 'fit'
+            isStreaming: false,
+            isDemoPattern: false,
+            bleConnected: false,
+            isVirtualWatch: true, // Default to high-fidelity virtual watch loopback
+            mtu: 23,
+            maxPayload: 20,
+            frameCounter: 0,
+            packetsSent: 0,
+            packetsLost: 0,
+            framesGenerated: 0,
+            framesTransmitted: 0,
+            framesDropped: 0,
+            totalBytesSent: 0,
+            totalBytesSaved: 0,
+            dirtyTilesLastFrame: 0,
+            lastFrameTimestamp: 0,
+            actualFps: 0,
+            packetQueue: [],
+            isTransmittingPacket: false,
+            tileHashCache: new Uint32Array(TOTAL_TILES),
+            watchFramebuffer: new Uint16Array(LCD_WIDTH * LCD_HEIGHT),
+            serviceUuid: '0000ffe0-0000-1000-8000-00805f9b34fb',
+            charUuid: '0000ffe1-0000-1000-8000-00805f9b34fb',
+            gattDevice: null,
+            gattServer: null,
+            gattCharacteristic: null
+        };
+
+        // DOM references
+        const watchCanvas = document.getElementById('watchCanvas');
+        const watchCtx = watchCanvas.getContext('2d', { willReadFrequently: true });
+        const tileDebugCanvas = document.getElementById('tileDebugCanvas');
+        const tileDebugCtx = tileDebugCanvas.getContext('2d');
+        const offscreenCanvas = document.getElementById('offscreenCanvas');
+        const offscreenCtx = offscreenCanvas.getContext('2d', { willReadFrequently: true });
+        const hiddenVideo = document.getElementById('hiddenScreenVideo');
+
+        function initTileMatrixGrid() {
+            const container = document.getElementById('tileMatrixGrid');
+            container.innerHTML = '';
+            for (let i = 0; i < TOTAL_TILES; i++) {
+                const tile = document.createElement('div');
+                tile.id = `matrix-tile-${i}`;
+                tile.className = 'w-full h-full rounded-[2px] bg-cyber-border/40 transition-colors duration-200 border border-black/20';
+                tile.title = `Tile ${i} (${i % 8}, ${Math.floor(i / 8)})`;
+                container.appendChild(tile);
+            }
+        }
+        initTileMatrixGrid();
+
+        function showToast(msg, icon = 'ℹ️') {
+            const toast = document.getElementById('toastNotification');
+            document.getElementById('toastMsg').textContent = msg;
+            document.getElementById('toastIcon').textContent = icon;
+            toast.classList.remove('translate-y-20', 'opacity-0');
+            toast.classList.add('translate-y-0', 'opacity-100');
+            setTimeout(() => {
+                toast.classList.remove('translate-y-0', 'opacity-100');
+                toast.classList.add('translate-y-20', 'opacity-0');
+            }, 3200);
+        }
+
+        /**
+         * Fast RGB888 to RGB565 converter
+         * RGB565: ((R & 0xF8) << 8) | ((G & 0xFC) << 3) | (B >> 3)
+         */
+        function rgb888ToRgb565(r, g, b) {
+            return ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
+        }
+
+        /**
+         * Decode RGB565 to [R, G, B] for visual preview
+         */
+        function rgb565ToRgb888(rgb565) {
+            const r = (rgb565 >> 11) & 0x1F;
+            const g = (rgb565 >> 5) & 0x3F;
+            const b = rgb565 & 0x1F;
+            return [
+                Math.round((r * 255) / 31),
+                Math.round((g * 255) / 63),
+                Math.round((b * 255) / 31)
+            ];
+        }
+
+        /**
+         * Fast CRC32/Adler for tile delta detection
+         */
+        function calculateTileChecksum(rgb565Array, offset, length) {
+            let a = 1, b = 0;
+            const MOD_ADLER = 65521;
+            for (let i = 0; i < length; i++) {
+                const val = rgb565Array[offset + i];
+                a = (a + (val & 0xFF)) % MOD_ADLER;
+                b = (b + a) % MOD_ADLER;
+                a = (a + ((val >> 8) & 0xFF)) % MOD_ADLER;
+                b = (b + a) % MOD_ADLER;
+            }
+            return (b << 16) | a;
+        }
+
+        async function startLiveScreenCapture() {
+            try {
+                if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+                    showToast('Screen capture API not supported in this browser environment. Using test signal.', '⚠️');
+                    toggleDemoSignal();
+                    return;
+                }
+
+                showToast('Requesting phone screen permission...', '📱');
+                const stream = await navigator.mediaDevices.getDisplayMedia({
+                    video: {
+                        cursor: "never",
+                        frameRate: { ideal: state.targetFps, max: 10 }
+                    },
+                    audio: false
+                });
+
+                hiddenVideo.srcObject = stream;
+                await hiddenVideo.play();
+
+                state.isStreaming = true;
+                state.isDemoPattern = false;
+                document.getElementById('btnStopStream').classList.remove('hidden');
+                document.getElementById('streamStatusText').textContent = 'LIVE SCREEN';
+                document.getElementById('streamStatusText').className = 'text-cyber-accent font-bold';
+                showToast('Live Screen Mirroring Started!', '✅');
+
+                stream.getVideoTracks()[0].onended = () => {
+                    stopScreenStream();
+                };
+
+                startCaptureLoop();
+            } catch (err) {
+                console.error("Screen capture cancelled or failed:", err);
+                showToast('Screen capture rejected or unavailable.', '❌');
+            }
+        }
+
+        function toggleDemoSignal() {
+            state.isStreaming = true;
+            state.isDemoPattern = true;
+            document.getElementById('btnStopStream').classList.remove('hidden');
+            document.getElementById('streamStatusText').textContent = 'TEST PATTERN';
+            document.getElementById('streamStatusText').className = 'text-cyber-primary font-bold';
+            showToast('Synthetic Watch Test Signal Active', '📺');
+            startCaptureLoop();
+        }
+
+        function stopScreenStream() {
+            state.isStreaming = false;
+            state.isDemoPattern = false;
+            if (hiddenVideo.srcObject) {
+                hiddenVideo.srcObject.getTracks().forEach(track => track.stop());
+                hiddenVideo.srcObject = null;
+            }
+            document.getElementById('btnStopStream').classList.add('hidden');
+            document.getElementById('streamStatusText').textContent = 'STREAM IDLE';
+            document.getElementById('streamStatusText').className = 'text-cyber-muted';
+            showToast('Mirroring Paused', '⏸️');
+        }
+
+        function setTargetFps(fps) {
+            state.targetFps = fps;
+            document.getElementById('fpsLabel').textContent = `${fps} FPS`;
+            document.querySelectorAll('.fps-btn').forEach(btn => {
+                btn.className = 'fps-btn py-1.5 rounded bg-cyber-card border border-cyber-border hover:border-cyber-primary font-mono';
+            });
+            event.target.className = 'fps-btn py-1.5 rounded bg-cyber-primary text-black font-bold font-mono';
+            showToast(`Target set to ${fps} FPS`);
+        }
+
+        function setScalingMode(mode) {
+            state.scalingMode = mode;
+            if (mode === 'crop') {
+                document.getElementById('btnScaleCrop').className = 'py-2 px-3 rounded-lg bg-cyber-primary text-black font-bold text-center border border-cyber-primary';
+                document.getElementById('btnScaleFit').className = 'py-2 px-3 rounded-lg bg-cyber-card text-cyber-muted hover:text-white font-medium text-center border border-cyber-border';
+            } else {
+                document.getElementById('btnScaleFit').className = 'py-2 px-3 rounded-lg bg-cyber-primary text-black font-bold text-center border border-cyber-primary';
+                document.getElementById('btnScaleCrop').className = 'py-2 px-3 rounded-lg bg-cyber-card text-cyber-muted hover:text-white font-medium text-center border border-cyber-border';
+            }
+            showToast(`Scale mode: ${mode === 'crop' ? 'Center Crop' : 'Fit Letterbox'}`);
+        }
+
+        let demoAngle = 0;
+        function renderSyntheticSignal(ctx) {
+            demoAngle += 0.05;
+            // Background gradient
+            const grad = ctx.createLinearGradient(0, 0, 128, 128);
+            grad.addColorStop(0, '#0a0d18');
+            grad.addColorStop(1, '#001a33');
+            ctx.fillStyle = grad;
+            ctx.fillRect(0, 0, 128, 128);
+
+            // Rotating Cyber Radar / Clock Hand
+            ctx.save();
+            ctx.translate(64, 64);
+            ctx.rotate(demoAngle);
+            ctx.strokeStyle = '#00f0ff';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(0, 0);
+            ctx.lineTo(48, 0);
+            ctx.stroke();
+
+            // Center beacon
+            ctx.fillStyle = '#ff0055';
+            ctx.beginPath();
+            ctx.arc(0, 0, 4, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.restore();
+
+            // Digital Clock & Status Text (Simulating real phone lockscreen)
+            const now = new Date();
+            const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
+            ctx.fillStyle = '#ffffff';
+            ctx.font = 'bold 16px "Chakra Petch", monospace';
+            ctx.textAlign = 'center';
+            ctx.fillText(timeStr, 64, 34);
+
+            // Bouncing mini ball in bottom tile to trigger selective 16x16 dirty tiles
+            const ballX = 64 + Math.sin(demoAngle * 2) * 40;
+            const ballY = 96 + Math.cos(demoAngle * 3) * 12;
+            ctx.fillStyle = '#00ff66';
+            ctx.beginPath();
+            ctx.arc(ballX, ballY, 5, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.font = '8px monospace';
+            ctx.fillStyle = '#8b9bb4';
+            ctx.fillText('BL6133 128x128', 64, 122);
+        }
+
+        let lastFrameTime = performance.now();
+        const rawFrameBuffer = new Uint16Array(LCD_WIDTH * LCD_HEIGHT); // 128x128 in RGB565
+
+        function startCaptureLoop() {
+            function processNextTick(now) {
+                if (!state.isStreaming) return;
+
+                const frameInterval = 1000 / state.targetFps;
+                const elapsed = now - lastFrameTime;
+
+                if (elapsed >= frameInterval) {
+                    lastFrameTime = now - (elapsed % frameInterval);
+
+                    // Drop frame if BLE packet queue is backed up (Backpressure handling)
+                    if (state.packetQueue.length > 30) {
+                        state.framesDropped++;
+                        document.getElementById('statFramesDropped').textContent = state.framesDropped;
+                        // Prune stale un-transmitted packets to maintain low latency
+                        state.packetQueue = state.packetQueue.slice(-10);
+                        requestAnimationFrame(processNextTick);
+                        return;
+                    }
+
+                    captureAndProcessCurrentFrame();
+                }
+
+                requestAnimationFrame(processNextTick);
+            }
+            requestAnimationFrame(processNextTick);
+        }
+
+        function captureAndProcessCurrentFrame() {
+            state.framesGenerated++;
+
+            // Draw source to 128x128 offscreen canvas with crop/fit
+            offscreenCtx.fillStyle = '#000000';
+            offscreenCtx.fillRect(0, 0, LCD_WIDTH, LCD_HEIGHT);
+
+            if (state.isDemoPattern) {
+                renderSyntheticSignal(offscreenCtx);
+            } else if (hiddenVideo.videoWidth > 0) {
+                const srcW = hiddenVideo.videoWidth;
+                const srcH = hiddenVideo.videoHeight;
+
+                if (state.scalingMode === 'crop') {
+                    // Center Crop
+                    const scale = Math.max(LCD_WIDTH / srcW, LCD_HEIGHT / srcH);
+                    const dw = srcW * scale;
+                    const dh = srcH * scale;
+                    const dx = (LCD_WIDTH - dw) / 2;
+                    const dy = (LCD_HEIGHT - dh) / 2;
+                    offscreenCtx.drawImage(hiddenVideo, dx, dy, dw, dh);
+                } else {
+                    // Fit with Letterbox
+                    const scale = Math.min(LCD_WIDTH / srcW, LCD_HEIGHT / srcH);
+                    const dw = srcW * scale;
+                    const dh = srcH * scale;
+                    const dx = (LCD_WIDTH - dw) / 2;
+                    const dy = (LCD_HEIGHT - dh) / 2;
+                    offscreenCtx.drawImage(hiddenVideo, dx, dy, dw, dh);
+                }
+            }
+
+            // Extract RGBA pixels and convert to 128x128 RGB565 buffer
+            const imgData = offscreenCtx.getImageData(0, 0, LCD_WIDTH, LCD_HEIGHT).data;
+            let pixelIdx = 0;
+            for (let i = 0; i < imgData.length; i += 4) {
+                rawFrameBuffer[pixelIdx++] = rgb888ToRgb565(imgData[i], imgData[i + 1], imgData[i + 2]);
+            }
+
+            // Delta-tile comparison (64 tiles)
+            let dirtyTiles = [];
+            const tileBuffer = new Uint16Array(TILE_PIXELS);
+
+            for (let ty = 0; ty < TILES_PER_ROW; ty++) {
+                for (let tx = 0; tx < TILES_PER_ROW; tx++) {
+                    const tileId = ty * TILES_PER_ROW + tx;
+                    
+                    // Copy 16x16 tile pixels into contiguous buffer
+                    let tIdx = 0;
+                    for (let py = 0; py < TILE_SIZE; py++) {
+                        const rowStart = (ty * TILE_SIZE + py) * LCD_WIDTH + (tx * TILE_SIZE);
+                        for (let px = 0; px < TILE_SIZE; px++) {
+                            tileBuffer[tIdx++] = rawFrameBuffer[rowStart + px];
+                        }
+                    }
+
+                    // Compute CRC32 / Adler hash of tile
+                    const tileHash = calculateTileChecksum(tileBuffer, 0, TILE_PIXELS);
+
+                    // Check with tile cache
+                    if (tileHash !== state.tileHashCache[tileId] || state.framesGenerated === 1) {
+                        state.tileHashCache[tileId] = tileHash;
+                        // Clone tile data
+                        const tileDataCopy = new Uint16Array(tileBuffer);
+                        dirtyTiles.push({ tileId, tx, ty, data: tileDataCopy });
+                        updateMatrixGridUI(tileId, true);
+                    } else {
+                        updateMatrixGridUI(tileId, false);
+                    }
+                }
+            }
+
+            // Update stats
+            state.dirtyTilesLastFrame = dirtyTiles.length;
+            const fullFrameBytes = 32768;
+            const sentBytes = dirtyTiles.length * (TILE_BYTE_SIZE + 16); // including packet headers
+            const savedBytes = Math.max(0, fullFrameBytes - sentBytes);
+            const savingsPercent = ((savedBytes / fullFrameBytes) * 100).toFixed(1);
+
+            state.totalBytesSent += sentBytes;
+            state.totalBytesSaved += savedBytes;
+
+            document.getElementById('statDirtyTiles').textContent = `${dirtyTiles.length} / 64`;
+            document.getElementById('statDirtyPercent').textContent = `${((dirtyTiles.length / 64) * 100).toFixed(1)}% changed`;
+            document.getElementById('statFrameBytes').textContent = `${sentBytes.toLocaleString()} B`;
+            document.getElementById('savingsBadge').textContent = `${savingsPercent}% SAVED`;
+            document.getElementById('statTotalBytes').textContent = `${(state.totalBytesSent / 1024).toFixed(1)} KB`;
+            document.getElementById('statSavedBytes').textContent = `${(state.totalBytesSaved / 1024).toFixed(1)} KB`;
+
+            // Packetize and Queue for BLE transmission
+            if (dirtyTiles.length > 0) {
+                packetizeFrameTiles(dirtyTiles);
+                state.framesTransmitted++;
+                document.getElementById('statFramesTotal').textContent = state.framesTransmitted;
+            }
+
+            // Real-time HUD stats
+            calculateThroughput();
+        }
+
+        function updateMatrixGridUI(tileId, isDirty) {
+            const el = document.getElementById(`matrix-tile-${tileId}`);
+            if (!el) return;
+            if (isDirty) {
+                el.style.backgroundColor = '#00ff66';
+                setTimeout(() => {
+                    if (el) el.style.backgroundColor = '';
+                }, 180);
+            }
+        }
+
+        /**
+         * Packet Structure:
+         * Byte 0: Magic Header (0xAA)
+         * Byte 1: Version (0x01)
+         * Byte 2: Frame ID (8-bit roll)
+         * Byte 3: Tile ID (0 - 63)
+         * Byte 4: Tile X (0 - 7)
+         * Byte 5: Tile Y (0 - 7)
+         * Byte 6: Fragment Seq (0..N) & Flags (Bit 7: Last fragment)
+         * Byte 7: Fragment Payload Length
+         * Byte 8..N-2: Raw RGB565 Tile Bytes
+         * Byte N-1..N: CRC16-CCITT Checksum
+         */
+        let currentFrameId = 0;
+
+        function packetizeFrameTiles(dirtyTiles) {
+            currentFrameId = (currentFrameId + 1) & 0xFF;
+            const usableMtu = state.maxPayload; // e.g. 20 bytes standard, up to 244 with MTU 247
+            const headerOverhead = 8;
+            const footerOverhead = 2; // CRC16
+            const maxChunkData = Math.max(10, usableMtu - (headerOverhead + footerOverhead));
+
+            for (const tile of dirtyTiles) {
+                // Convert Uint16Array (256 pixels) to Uint8Array (512 bytes)
+                const byteBuffer = new Uint8Array(tile.data.buffer);
+                const totalBytes = byteBuffer.byteLength; // 512
+                let offset = 0;
+                let seq = 0;
+                const totalFragments = Math.ceil(totalBytes / maxChunkData);
+
+                while (offset < totalBytes) {
+                    const chunkLength = Math.min(maxChunkData, totalBytes - offset);
+                    const isLastFragment = (offset + chunkLength >= totalBytes);
+                    
+                    // Create packet buffer
+                    const packet = new Uint8Array(headerOverhead + chunkLength + footerOverhead);
+                    packet[0] = PROTOCOL_HEADER_MAGIC;
+                    packet[1] = PROTOCOL_VERSION;
+                    packet[2] = currentFrameId;
+                    packet[3] = tile.tileId;
+                    packet[4] = tile.tx;
+                    packet[5] = tile.ty;
+                    packet[6] = (seq & 0x7F) | (isLastFragment ? 0x80 : 0x00);
+                    packet[7] = chunkLength;
+
+                    // Copy chunk data
+                    packet.set(byteBuffer.subarray(offset, offset + chunkLength), headerOverhead);
+
+                    // Compute CRC16 over packet payload
+                    let crc = 0xFFFF;
+                    for (let c = 0; c < headerOverhead + chunkLength; c++) {
+                        crc ^= (packet[c] << 8);
+                        for (let b = 0; b < 8; b++) {
+                            crc = (crc & 0x8000) ? ((crc << 1) ^ 0x1021) : (crc << 1);
+                        }
+                    }
+                    packet[headerOverhead + chunkLength] = (crc >> 8) & 0xFF;
+                    packet[headerOverhead + chunkLength + 1] = crc & 0xFF;
+
+                    state.packetQueue.push(packet);
+
+                    offset += chunkLength;
+                    seq++;
+                }
+            }
+
+            document.getElementById('statQueueSize').textContent = `${state.packetQueue.length} pkts`;
+            processTransmissionQueue();
+        }
+
+        async function processTransmissionQueue() {
+            if (state.isTransmittingPacket || state.packetQueue.length === 0) return;
+
+            state.isTransmittingPacket = true;
+            const packet = state.packetQueue.shift();
+            state.packetsSent++;
+            document.getElementById('statPacketsTotal').textContent = state.packetsSent;
+            document.getElementById('statQueueSize').textContent = `${state.packetQueue.length} pkts`;
+
+            // If physical BLE GATT connected, send via characteristic
+            if (state.gattCharacteristic && state.bleConnected) {
+                try {
+                    if (state.gattCharacteristic.writeValueWithoutResponse) {
+                        await state.gattCharacteristic.writeValueWithoutResponse(packet);
+                    } else {
+                        await state.gattCharacteristic.writeValue(packet);
+                    }
+                } catch (err) {
+                    console.warn("BLE packet write dropped:", err);
+                    state.packetsLost++;
+                }
+            }
+
+            // Always forward to local Watch Receiver Simulator
+            watchHardwareReceiver(packet);
+
+            // Print snippet to HEX terminal periodically
+            if (state.packetsSent % 4 === 0) {
+                logHexTerminal(packet);
+            }
+
+            state.isTransmittingPacket = false;
+
+            // Micro-yield for BLE timing
+            if (state.packetQueue.length > 0) {
+                // Throttle based on MTU & hardware speed (BL6133 prefers ~5ms-10ms packet interval)
+                setTimeout(processTransmissionQueue, state.isVirtualWatch ? 2 : 8);
+            }
+        }
+
+        // Tile reassembly buffer on watch side: 64 tiles, each 512 bytes
+        const watchTileReassembly = new Array(TOTAL_TILES).fill(null).map(() => ({
+            buffer: new Uint8Array(TILE_BYTE_SIZE),
+            bytesReceived: 0,
+            expectedFrame: -1
+        }));
+
+        function watchHardwareReceiver(packet) {
+            // 1. Validate magic header and version
+            if (packet[0] !== PROTOCOL_HEADER_MAGIC || packet[1] !== PROTOCOL_VERSION) {
+                return; // Discard corrupt packet
+            }
+
+            const frameId = packet[2];
+            const tileId = packet[3];
+            const tileX = packet[4];
+            const tileY = packet[5];
+            const seqFlag = packet[6];
+            const seq = seqFlag & 0x7F;
+            const isLast = (seqFlag & 0x80) !== 0;
+            const chunkLen = packet[7];
+
+            if (tileId >= TOTAL_TILES) return;
+
+            const reassembly = watchTileReassembly[tileId];
+
+            // Reset reassembly if new frame arrived for this tile
+            if (reassembly.expectedFrame !== frameId) {
+                reassembly.expectedFrame = frameId;
+                reassembly.bytesReceived = 0;
+            }
+
+            // Append payload to tile buffer
+            const chunkData = packet.subarray(8, 8 + chunkLen);
+            if (reassembly.bytesReceived + chunkLen <= TILE_BYTE_SIZE) {
+                reassembly.buffer.set(chunkData, reassembly.bytesReceived);
+                reassembly.bytesReceived += chunkLen;
+            }
+
+            // 2. If all 512 bytes arrived (or flagged as last), flush to watch LCD framebuffer
+            if (isLast || reassembly.bytesReceived >= TILE_BYTE_SIZE) {
+                flushTileToWatchLcd(tileX, tileY, reassembly.buffer);
+                reassembly.bytesReceived = 0; // ready for next
+            }
+        }
+
+        /**
+         * Watch LCD controller: blit 16x16 RGB565 tile directly to 128x128 display
+         */
+        function flushTileToWatchLcd(tileX, tileY, uint8TileData) {
+            const tile16 = new Uint16Array(uint8TileData.buffer);
+            const startX = tileX * TILE_SIZE;
+            const startY = tileY * TILE_SIZE;
+
+            // Render directly into watch Canvas
+            const imgData = watchCtx.getImageData(startX, startY, TILE_SIZE, TILE_SIZE);
+            const pixels = imgData.data;
+
+            let srcIdx = 0;
+            let dstIdx = 0;
+            for (let py = 0; py < TILE_SIZE; py++) {
+                for (let px = 0; px < TILE_SIZE; px++) {
+                    const rgb565 = tile16[srcIdx++];
+                    const [r, g, b] = rgb565ToRgb888(rgb565);
+                    pixels[dstIdx++] = r;
+                    pixels[dstIdx++] = g;
+                    pixels[dstIdx++] = b;
+                    pixels[dstIdx++] = 255;
+
+                    // Update memory state
+                    state.watchFramebuffer[(startY + py) * LCD_WIDTH + (startX + px)] = rgb565;
+                }
+            }
+            watchCtx.putImageData(imgData, startX, startY);
+
+            // Optional visual highlight box for dirty tile debugging
+            if (document.getElementById('chkShowTiles').checked) {
+                highlightDebugTile(startX, startY);
+            }
+        }
+
+        let debugClearTimeout = null;
+        function highlightDebugTile(x, y) {
+            tileDebugCtx.strokeStyle = 'rgba(0, 255, 102, 0.7)';
+            tileDebugCtx.lineWidth = 1;
+            tileDebugCtx.strokeRect(x + 0.5, y + 0.5, 15, 15);
+
+            if (!debugClearTimeout) {
+                debugClearTimeout = setTimeout(() => {
+                    tileDebugCtx.clearRect(0, 0, 128, 128);
+                    debugClearTimeout = null;
+                }, 150);
+            }
+        }
+
+        async function startBleDiscovery() {
+            if (!navigator.bluetooth) {
+                document.getElementById('bleSupportNotice').classList.remove('hidden');
+                showToast('Web Bluetooth unavailable. Use Chrome on Android or Virtual BLE.', '⚠️');
+                return;
+            }
+
+            try {
+                showToast('Scanning for BL6133 / GL6113 BLE devices...', '🔍');
+                const device = await navigator.bluetooth.requestDevice({
+                    acceptAllDevices: true,
+                    optionalServices: [
+                        '0000ffe0-0000-1000-8000-00805f9b34fb',
+                        '0000fff0-0000-1000-8000-00805f9b34fb',
+                        '6e400001-b5a3-f393-e0a9-e50e24dcca9e',
+                        state.serviceUuid.toLowerCase()
+                    ]
+                });
+
+                state.gattDevice = device;
+                document.getElementById('targetDevName').textContent = device.name || 'BL6133 Smartwatch';
+                showToast(`Found device: ${device.name || 'Unnamed Watch'}. Connecting...`, '🔗');
+
+                device.addEventListener('gattserverdisconnected', onBleDisconnected);
+
+                const server = await device.gatt.connect();
+                state.gattServer = server;
+                state.bleConnected = true;
+
+                // Enumerate Services
+                await enumerateGattServices(server);
+
+                // Update UI state
+                setBleConnectionStatus(true, device.name || 'BL6133 Connected');
+                showToast('Watch Connected via BLE GATT!', '⚡');
+
+            } catch (err) {
+                console.error("BLE connection error:", err);
+                showToast(`BLE Connect Failed: ${err.message || err}`, '❌');
+            }
+        }
+
+        function toggleVirtualBleWatch() {
+            state.isVirtualWatch = !state.isVirtualWatch;
+            if (state.isVirtualWatch) {
+                setBleConnectionStatus(true, 'Virtual Watch (BL6133 Emulated)');
+                state.mtu = 247;
+                state.maxPayload = 240;
+                document.getElementById('statMtu').textContent = '247 bytes (Fast Sim)';
+                document.getElementById('statPayload').textContent = '240 bytes';
+                showToast('Virtual BLE Loopback Connected!', '🚀');
+            } else {
+                setBleConnectionStatus(false, 'Disconnected');
+                showToast('Virtual BLE Disconnected', '🔌');
+            }
+        }
+
+        function setBleConnectionStatus(connected, label) {
+            state.bleConnected = connected;
+            const dot = document.getElementById('bleStatusDot');
+            const txt = document.getElementById('bleStatusText');
+
+            if (connected) {
+                dot.className = 'w-2.5 h-2.5 rounded-full bg-cyber-accent pulse-beacon';
+                txt.textContent = 'CONNECTED';
+                txt.className = 'text-cyber-accent font-bold';
+            } else {
+                dot.className = 'w-2.5 h-2.5 rounded-full bg-cyber-danger';
+                txt.textContent = 'DISCONNECTED';
+                txt.className = 'text-cyber-muted font-medium';
+            }
+        }
+
+        function onBleDisconnected() {
+            setBleConnectionStatus(false, 'Disconnected');
+            showToast('Watch BLE Connection Lost', '⚠️');
+        }
+
+        async function enumerateGattServices(server) {
+            const container = document.getElementById('gattTreeContainer');
+            container.innerHTML = '<div class="text-cyber-primary">// Discovering Primary Services...</div>';
+
+            try {
+                const services = await server.getPrimaryServices();
+                container.innerHTML = '';
+
+                for (const s of services) {
+                    const servEl = document.createElement('div');
+                    servEl.className = 'p-2 bg-cyber-card rounded border border-cyber-border space-y-1 mb-2';
+                    servEl.innerHTML = `<div class="text-cyber-primary font-bold">Service: ${s.uuid}</div>`;
+
+                    const chars = await s.getCharacteristics();
+                    for (const c of chars) {
+                        const props = [];
+                        if (c.properties.read) props.push('READ');
+                        if (c.properties.write) props.push('WRITE');
+                        if (c.properties.writeWithoutResponse) props.push('WRITE_NO_RESP');
+                        if (c.properties.notify) props.push('NOTIFY');
+
+                        // Automatically bind writable characteristic for screen streaming
+                        if ((c.properties.write || c.properties.writeWithoutResponse) && !state.gattCharacteristic) {
+                            state.gattCharacteristic = c;
+                            state.serviceUuid = s.uuid;
+                            state.charUuid = c.uuid;
+                            document.getElementById('cfgServiceUuid').value = s.uuid;
+                            document.getElementById('cfgCharUuid').value = c.uuid;
+                        }
+
+                        const charEl = document.createElement('div');
+                        charEl.className = 'pl-4 text-[11px] text-cyber-text flex justify-between items-center';
+                        charEl.innerHTML = `
+                            <span>├─ Char: <span class="text-white">${c.uuid}</span></span>
+                            <span class="text-[9px] px-1 bg-cyber-bg border border-cyber-border rounded text-cyber-accent">${props.join(' | ')}</span>
+                        `;
+                        servEl.appendChild(charEl);
+                    }
+                    container.appendChild(servEl);
+                }
+
+                showToast(`Discovered ${services.length} GATT Services`);
+            } catch (err) {
+                container.innerHTML = `<div class="text-cyber-danger">Service Discovery Failed: ${err.message}</div>`;
+            }
+        }
+
+        function detectGattServices() {
+            if (state.gattServer && state.gattServer.connected) {
+                enumerateGattServices(state.gattServer);
+            } else {
+                showToast('Connect real watch first to discover services', '⚠️');
+            }
+        }
+
+        function applyGattConfig() {
+            state.serviceUuid = document.getElementById('cfgServiceUuid').value.trim();
+            state.charUuid = document.getElementById('cfgCharUuid').value.trim();
+            showToast('UUID configuration saved!', '✅');
+        }
+
+        function sendManualHex() {
+            const rawHex = document.getElementById('manualHexInput').value.replace(/[^0-9A-Fa-f]/g, '');
+            if (rawHex.length % 2 !== 0) {
+                showToast('Hex length must be an even number of characters', '❌');
+                return;
+            }
+            const bytes = new Uint8Array(rawHex.length / 2);
+            for (let i = 0; i < bytes.length; i++) {
+                bytes[i] = parseInt(rawHex.substr(i * 2, 2), 16);
+            }
+
+            if (state.gattCharacteristic && state.bleConnected) {
+                state.gattCharacteristic.writeValue(bytes)
+                    .then(() => showToast(`Sent ${bytes.length} bytes to watch!`, '✅'))
+                    .catch(err => showToast(`Write failed: ${err.message}`, '❌'));
+            } else {
+                // Run in virtual loopback
+                watchHardwareReceiver(bytes);
+                showToast(`Virtual write: ${bytes.length} bytes delivered`, '✅');
+            }
+            logHexTerminal(bytes);
+        }
+
+        function logHexTerminal(bytes) {
+            const term = document.getElementById('hexTerminal');
+            const line = document.createElement('div');
+            const hexParts = [];
+            for (let i = 0; i < Math.min(16, bytes.length); i++) {
+                hexParts.push(bytes[i].toString(16).padStart(2, '0').toUpperCase());
+            }
+            const hexStr = hexParts.join(' ') + (bytes.length > 16 ? ` ...(+${bytes.length - 16}B)` : '');
+            line.innerHTML = `<span class="text-cyber-muted">[TX ${new Date().toLocaleTimeString().split(' ')[0]}]</span> <span class="text-cyber-accent font-bold">${hexStr}</span>`;
+            term.appendChild(line);
+
+            if (term.children.length > 40) {
+                term.removeChild(term.children[1]);
+            }
+            term.scrollTop = term.scrollHeight;
+        }
+
+        function clearTerminal() {
+            const term = document.getElementById('hexTerminal');
+            term.innerHTML = '<div class="text-cyber-muted">// Terminal cleared. Waiting for packet events...</div>';
+        }
+
+        let lastTelemetryTime = performance.now();
+        let lastBytesSample = 0;
+        let lastPacketsSample = 0;
+
+        function switchTab(tabId) {
+            document.getElementById('tabAppBtn').className = 'px-3 py-1.5 rounded-md text-cyber-muted hover:text-white font-mono transition';
+            document.getElementById('tabDiagBtn').className = 'px-3 py-1.5 rounded-md text-cyber-muted hover:text-white font-mono transition';
+            document.getElementById('tabCodeBtn').className = 'px-3 py-1.5 rounded-md text-cyber-muted hover:text-white font-mono transition';
+            if (document.getElementById('tabApkBtn')) {
+                document.getElementById('tabApkBtn').className = 'px-3 py-1.5 rounded-md text-cyber-muted hover:text-white font-mono transition';
+            }
+
+            document.querySelector('main').classList.add('hidden');
+            document.getElementById('diagnosticView').classList.add('hidden');
+            document.getElementById('codeView').classList.add('hidden');
+            if (document.getElementById('apkView')) {
+                document.getElementById('apkView').classList.add('hidden');
+            }
+
+            if (tabId === 'app') {
+                document.getElementById('tabAppBtn').className = 'px-3 py-1.5 rounded-md bg-cyber-card text-cyber-primary shadow font-mono';
+                document.querySelector('main').classList.remove('hidden');
+            } else if (tabId === 'diag') {
+                document.getElementById('tabDiagBtn').className = 'px-3 py-1.5 rounded-md bg-cyber-card text-cyber-primary shadow font-mono';
+                document.getElementById('diagnosticView').classList.remove('hidden');
+            } else if (tabId === 'code') {
+                document.getElementById('tabCodeBtn').className = 'px-3 py-1.5 rounded-md bg-cyber-card text-cyber-primary shadow font-mono';
+                document.getElementById('codeView').classList.remove('hidden');
+                displayCodeFile('ScreenCaptureService');
+            } else if (tabId === 'apk') {
+                if (document.getElementById('tabApkBtn')) {
+                    document.getElementById('tabApkBtn').className = 'px-3 py-1.5 rounded-md bg-cyber-primary text-black font-mono font-bold shadow';
+                }
+                if (document.getElementById('apkView')) {
+                    document.getElementById('apkView').classList.remove('hidden');
+                }
+            }
+        }
+        return packetBatch
+    }
+
+    private fun fragmentTile(frameId: Byte, tileId: Byte, tx: Byte, ty: Byte, pixels: ShortArray): List<ByteArray> {
+        val packets = mutableListOf<ByteArray>()
+        val byteBuf = ByteArray(TILE_PIXELS * 2) // 512 bytes
+
+        // Convert ShortArray to Little-Endian / Big-Endian RGB565 bytes
+        for (i in 0 until TILE_PIXELS) {
+            val v = pixels[i].toInt()
+            byteBuf[i * 2] = (v and 0xFF).toByte()
+            byteBuf[i * 2 + 1] = ((v shr 8) and 0xFF).toByte()
+        }
+
+        val mtuPayload = BleMirrorManager.usablePayload // typically 20 to 240 bytes
+        val headerSize = 8
+        val footerSize = 2 // CRC16
+        val maxChunk = (mtuPayload - (headerSize + footerSize)).coerceAtLeast(10)
+
+        var offset = 0
+        var seq: Byte = 0
+        val totalBytes = byteBuf.size
+
+        while (offset < totalBytes) {
+            val chunkLen = Math.min(maxChunk, totalBytes - offset)
+            val isLast = (offset + chunkLen >= totalBytes)
+
+            val packet = ByteArray(headerSize + chunkLen + footerSize)
+            packet[0] = HEADER_MAGIC
+            packet[1] = PROTOCOL_VER
+            packet[2] = frameId
+            packet[3] = tileId
+            packet[4] = tx
+            packet[5] = ty
+            packet[6] = (seq.toInt() or (if (isLast) 0x80 else 0x00)).toByte()
+            packet[7] = chunkLen.toByte()
+
+            System.arraycopy(byteBuf, offset, packet, headerSize, chunkLen)
+
+            // Fast CRC16
+            val crc = crc16(packet, headerSize + chunkLen)
+            packet[headerSize + chunkLen] = ((crc shr 8) and 0xFF).toByte()
+            packet[headerSize + chunkLen + 1] = (crc and 0xFF).toByte()
+
+            packets.add(packet)
+            offset += chunkLen
+            seq++
+        }
+        return packets
+    }
+
+    private fun computeChecksum(data: ShortArray): Long {
+        var a = 1L
+        var b = 0L
+        for (v in data) {
+            val unsigned = v.toInt() and 0xFFFF
+            a = (a + (unsigned and 0xFF)) % 65521L
+            b = (b + a) % 65521L
+            a = (a + ((unsigned shr 8) and 0xFF)) % 65521L
+            b = (b + a) % 65521L
+        }
+        return (b shl 16) or a
+    }
+
+    private fun crc16(buffer: ByteArray, length: Int): Int {
+        var crc = 0xFFFF
+        for (i in 0 until length) {
+            crc = crc xor ((buffer[i].toInt() and 0xFF) shl 8)
+            for (j in 0 until 8) {
+                crc = if ((crc and 0x8000) != 0) (crc shl 1) xor 0x1021 else (crc shl 1)
+            }
+        }
+        return crc and 0xFFFF
+    }
+}`,
+            BleMirrorManager: `package com.chronosync.ble
+
+import android.annotation.SuppressLint
+import android.bluetooth.*
+import android.content.Context
+import kotlinx.coroutines.*
+import java.util.*
+import java.util.concurrent.ConcurrentLinkedQueue
+
+/**
+ * High-performance BLE GATT Manager with Backpressure Queue,
+ * MTU negotiation (requesting 247), dynamic payload sizing, and auto-reconnect.
+ */
+@SuppressLint("MissingPermission")
+object BleMirrorManager {
+
+    var usablePayload: Int = 20
+        private set
+
+    private var bluetoothGatt: BluetoothGatt? = null
+    private var writeChar: BluetoothGattCharacteristic? = null
+    private val packetQueue = ConcurrentLinkedQueue<ByteArray>()
+    private var isSending = false
+    private val scope = CoroutineScope(Dispatchers.IO + Job())
+
+    // BL6133 Standard Serial GATT Service or Configurable UUIDs
+    var serviceUuid: UUID = UUID.fromString("0000ffe0-0000-1000-8000-00805f9b34fb")
+    var charUuid: UUID = UUID.fromString("0000ffe1-0000-1000-8000-00805f9b34fb")
+
+    fun connect(context: Context, device: BluetoothDevice) {
+        bluetoothGatt = device.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
+    }
+
+    private val gattCallback = object : BluetoothGattCallback() {
+        override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
+            if (newState == BluetoothProfile.STATE_CONNECTED) {
+                // Request maximum MTU for high throughput
+                gatt.requestMtu(247)
+            } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                writeChar = null
+                bluetoothGatt = null
+            }
+        }
+
+        override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                usablePayload = (mtu - 3).coerceAtLeast(20)
+            }
+            gatt.discoverServices()
+        }
+
+        override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                val service = gatt.getService(serviceUuid) ?: gatt.services.firstOrNull()
+                writeChar = service?.characteristics?.firstOrNull {
+                    (it.properties and BluetoothGattCharacteristic.PROPERTY_WRITE != 0) ||
+                    (it.properties and BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE != 0)
+                }
+            }
+        }
+
+        override fun onCharacteristicWrite(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int) {
+            isSending = false
+            triggerNextSend()
+        }
+    }
+
+    fun enqueuePackets(packets: List<ByteArray>) {
+        // Backpressure safeguard: if queue exceeds 100 packets, drop stale packets to prevent latency drift
+        if (packetQueue.size > 100) {
+            packetQueue.clear()
+        }
+        packetQueue.addAll(packets)
+        triggerNextSend()
+    }
+
+    private fun triggerNextSend() {
+        if (isSending || packetQueue.isEmpty() || writeChar == null || bluetoothGatt == null) return
+
+        isSending = true
+        scope.launch {
+            val packet = packetQueue.poll() ?: run {
+                isSending = false
+                return@launch
+            }
+
+            writeChar?.let { ch ->
+                ch.value = packet
+                ch.writeType = if ((ch.properties and BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE) != 0) {
+                    BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
+                } else {
+                    BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+                }
+                bluetoothGatt?.writeCharacteristic(ch)
+            }
+
+            // Fallback unlock if WRITE_TYPE_NO_RESPONSE doesn't trigger callback
+            if (writeChar?.writeType == BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE) {
+                delay(4)
+                isSending = false
+                triggerNextSend()
+            }
+        }
+    }
+}`,
+            MainActivity: `package com.chronosync.ble
+
+import android.Manifest
+import android.app.Activity
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothManager
+import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.media.projection.MediaProjectionManager
+import android.os.Build
+import android.os.Bundle
+import android.widget.Button
+import android.widget.TextView
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AppCompatActivity
+import androidx.core.app.ActivityCompat
+
+class MainActivity : AppCompatActivity() {
+
+    private lateinit var projectionManager: MediaProjectionManager
+    private var selectedFps = 3
+
+    private val screenCaptureLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK && result.data != null) {
+            val serviceIntent = Intent(this, ScreenCaptureService::class.java).apply {
+                putExtra(ScreenCaptureService.EXTRA_RESULT_CODE, result.resultCode)
+                putExtra(ScreenCaptureService.EXTRA_DATA, result.data)
+                putExtra(ScreenCaptureService.EXTRA_FPS, selectedFps)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(serviceIntent)
+            } else {
+                startService(serviceIntent)
+            }
+            findViewById<TextView>(R.id.tvStatus).text = "Mirroring to BL6133 Active (FPS: $selectedFps)"
+        }
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContentView(R.layout.activity_main)
+
+        projectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+
+        requestPermissions()
+
+        findViewById<Button>(R.id.btnStartMirror).setOnClickListener {
+            val captureIntent = projectionManager.createScreenCaptureIntent()
+            screenCaptureLauncher.launch(captureIntent)
+        }
+
+        findViewById<Button>(R.id.btnStopMirror).setOnClickListener {
+            stopService(Intent(this, ScreenCaptureService::class.java))
+            findViewById<TextView>(R.id.tvStatus).text = "Mirroring Stopped"
+        }
+    }
+
+    private fun requestPermissions() {
+        val permissions = mutableListOf(
+            Manifest.permission.BLUETOOTH_SCAN,
+            Manifest.permission.BLUETOOTH_CONNECT,
+            Manifest.permission.ACCESS_FINE_LOCATION
+        )
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            permissions.add(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        ActivityCompat.requestPermissions(this, permissions.toTypedArray(), 101)
+    }
+}`,
+            MreReceiver: `/**
+ * ============================================================================
+ * MediaTek MRE / Nucleus C Receiver for BL6133 / GL6113 / MX6XM-1.44 Smartwatch
+ * Branch: 11BW1308MP | MRE Version: 3100
+ * Compiles under ARM RVDS 3.1 / GCC for MTK MRE SDK
+ * ============================================================================
+ */
+#include "vmsys.h"
+#include "vmio.h"
+#include "vmgraph.h"
+#include "vmchset.h"
+#include "vmbt_gatt.h"
+
+#define LCD_WIDTH       128
+#define LCD_HEIGHT      128
+#define TILE_SIZE       16
+#define TILES_ROW       8
+#define TOTAL_TILES     64
+#define TILE_BYTES      (16 * 16 * 2) // 512 bytes
+
+#define PROTO_MAGIC     0xAA
+#define PROTO_VERSION   0x01
+
+/* Framebuffer in RAM for 128x128 RGB565 (32,768 bytes) */
+static VMUINT16 g_screen_fb[LCD_WIDTH * LCD_HEIGHT];
+
+/* Tile reassembly state */
+typedef struct {
+    VMUINT8 buffer[TILE_BYTES];
+    VMUINT16 received_bytes;
+    VMUINT8 frame_id;
+} tile_reassembly_t;
+
+static tile_reassembly_t g_tiles[TOTAL_TILES];
+
+/* Direct Hardware LCD blit function */
+void blit_tile_to_lcd(VMUINT8 tx, VMUINT8 ty, VMUINT8* rgb565_data) {
+    VMINT start_x = tx * TILE_SIZE;
+    VMINT start_y = ty * TILE_SIZE;
+    VMUINT16* src = (VMUINT16*)rgb565_data;
+    
+    for (VMINT y = 0; y < TILE_SIZE; y++) {
+        VMINT fb_row = (start_y + y) * LCD_WIDTH + start_x;
+        for (VMINT x = 0; x < TILE_SIZE; x++) {
+            g_screen_fb[fb_row + x] = *src++;
+        }
+    }
+    
+    /* Hardware MRE LCD block transfer */
+    vm_graphic_blt_ex((VMUINT16*)g_screen_fb, 
+                      start_x, start_y, 
+                      start_x, start_y, 
+                      TILE_SIZE, TILE_SIZE, 
+                      LCD_WIDTH);
+}
+
+/* GATT Characteristic Write Callback */
+void on_ble_packet_received(VMUINT8* packet, VMINT len) {
+    if (len < 10) return;
+    if (packet[0] != PROTO_MAGIC || packet[1] != PROTO_VERSION) return;
+
+    VMUINT8 frame_id = packet[2];
+    VMUINT8 tile_id  = packet[3];
+    VMUINT8 tx       = packet[4];
+    VMUINT8 ty       = packet[5];
+    VMUINT8 seq_flag = packet[6];
+    VMUINT8 chunk_sz = packet[7];
+    VMBOOL  is_last  = (seq_flag & 0x80) != 0;
+
+    if (tile_id >= TOTAL_TILES) return;
+
+    tile_reassembly_t* t = &g_tiles[tile_id];
+
+    /* Reset buffer if a new frame for this tile is encountered */
+    if (t->frame_id != frame_id) {
+        t->frame_id = frame_id;
+        t->received_bytes = 0;
+    }
+
+    if (t->received_bytes + chunk_sz <= TILE_BYTES) {
+        memcpy(t->buffer + t->received_bytes, &packet[8], chunk_sz);
+        t->received_bytes += chunk_sz;
+    }
+
+    /* When all 512 bytes of the 16x16 tile arrive, blast directly to LCD */
+    if (is_last || t->received_bytes >= TILE_BYTES) {
+        blit_tile_to_lcd(tx, ty, t->buffer);
+        t->received_bytes = 0;
+    }
+}
+
+/* MRE Application Entry Point */
+void vm_main(void) {
+    /* Clear display */
+    memset(g_screen_fb, 0, sizeof(g_screen_fb));
+    vm_graphic_clear_screen_rgb(0, 0, 0);
+
+    /* Register Custom GATT UUID 0xFFE0 / 0xFFE1 Receiver */
+    vm_bt_gatt_register_server();
+    vm_graphic_draw_text(10, 50, VM_COLOR_GREEN, "CHRONOSYNC BLE");
+    vm_graphic_draw_text(10, 70, VM_COLOR_WHITE, "WAITING STREAM...");
+}`,
+            AndroidManifest: `<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.chronosync.ble">
+
+    <!-- Screen Capture & Foreground Service Permissions -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- Bluetooth Low Energy Permissions -->
+    <uses-permission android:name="android.permission.BLUETOOTH" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN"
+                     android:usesPermissionFlags="neverForLocation" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+
+    <uses-feature android:name="android.hardware.bluetooth_le" android:required="true" />
+
+    <application
+        android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
+        android:label="ChronoSync BLE"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.MaterialComponents.DayNight.NoActionBar">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <service
+            android:name=".ScreenCaptureService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
+
+    </application>
+</manifest>`,
+            BuildGradle: `plugins {
+    id("com.android.application")
+    id("org.jetbrains.kotlin.android")
+}
+
+android {
+    namespace = "com.chronosync.ble"
+    compileSdk = 34
+
+    defaultConfig {
+        applicationId = "com.chronosync.ble"
+        minSdk = 26
+        targetSdk = 34
+        versionCode = 1
+        versionName = "1.0-BL6133"
+    }
+
+    buildTypes {
+        release {
+            isMinifyEnabled = false
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
+        }
+    }
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+}
+
+dependencies {
+    implementation("androidx.core:core-ktx:1.12.0")
+    implementation("androidx.appcompat:appcompat:1.6.1")
+    implementation("com.google.android.material:material:1.11.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
+}`,
+            ActivityLayout: `<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="#0A0D14"
+    android:padding="20dp"
+    android:gravity="center_horizontal">
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="CHRONOSYNC BLE"
+        android:textColor="#00F0FF"
+        android:textSize="22sp"
+        android:textStyle="bold"
+        android:layout_marginTop="24dp" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="128x128 BL6133 Smartwatch Mirror"
+        android:textColor="#8B9BB4"
+        android:textSize="12sp"
+        android:layout_marginBottom="32dp" />
+
+    <TextView
+        android:id="@+id/tvStatus"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="#161F36"
+        android:padding="16dp"
+        android:text="Status: Ready to connect"
+        android:textColor="#FFFFFF"
+        android:textSize="14sp"
+        android:layout_marginBottom="24dp" />
+
+    <Button
+        android:id="@+id/btnStartMirror"
+        android:layout_width="match_parent"
+        android:layout_height="56dp"
+        android:backgroundTint="#00F0FF"
+        android:textColor="#000000"
+        android:textStyle="bold"
+        android:text="START SCREEN MIRRORING"
+        android:layout_marginBottom="16dp" />
+
+    <Button
+        android:id="@+id/btnStopMirror"
+        android:layout_width="match_parent"
+        android:layout_height="56dp"
+        android:backgroundTint="#233252"
+        android:textColor="#FF0055"
+        android:text="STOP STREAM" />
+
+</LinearLayout>`,
+            GithubWorkflow: `name: Build ChronoSync BLE APK
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout Source Code
+      uses: actions/checkout@v4
+
+    - name: Set up JDK 17
+      uses: actions/setup-java@v4
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+
+    - name: Setup Android SDK
+      uses: android-actions/setup-android@v3
+
+    - name: Grant Execute Permission for Gradlew
+      run: chmod +x gradlew || true
+
+    - name: Build Debug APK
+      run: ./gradlew assembleDebug --stacktrace
+
+    - name: Upload Compiled APK Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ChronoSync-BLE-v1.0-APK
+        path: app/build/outputs/apk/debug/*.apk
+        retention-days: 14`
+        };
+
+        async function downloadApkProjectZip() {
+            if (typeof JSZip === 'undefined') {
+                showToast('ZIP library loading, please try again in a moment...', '⏳');
+                return;
+            }
+
+            showToast('Packaging full Android Studio project into ZIP...', '📦');
+            const zip = new JSZip();
+
+            // Project root configurations
+            zip.file("settings.gradle.kts", `pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+rootProject.name = "ChronoSyncBLE"
+include(":app")
+`);
+
+            zip.file("build.gradle.kts", `plugins {
+    id("com.android.application") version "8.2.2" apply false
+    id("org.jetbrains.kotlin.android") version "1.9.22" apply false
+}
+`);
+
+            zip.file("gradle.properties", `org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+android.useAndroidX=true
+android.nonTransitiveRClass=true
+`);
+
+            // Gradle wrapper scripts
+            zip.file("gradlew", `#!/usr/bin/env sh
+exec gradle "$@"
+`);
+            zip.file("gradlew.bat", `@rem Gradle wrapper
+gradle %*
+`);
+
+            const gradWrapper = zip.folder("gradle/wrapper");
+            gradWrapper.file("gradle-wrapper.properties", `distributionBase=GRADLE_USER_HOME
+distributionPath=wrapper/dists
+distributionUrl=https\\://services.gradle.org/distributions/gradle-8.5-bin.zip
+zipStoreBase=GRADLE_USER_HOME
+zipStorePath=wrapper/dists
+`);
+
+            // App module
+            const app = zip.folder("app");
+            app.file("build.gradle.kts", CODE_REPOSITORY.BuildGradle);
+            app.file("proguard-rules.pro", `# ChronoSync BLE Proguard Rules\n-keep class com.chronosync.ble.** { *; }\n`);
+
+            const srcMain = app.folder("src/main");
+            srcMain.file("AndroidManifest.xml", CODE_REPOSITORY.AndroidManifest);
+
+            // Kotlin Source Files
+            const javaPkg = srcMain.folder("java/com/chronosync/ble");
+            javaPkg.file("MainActivity.kt", CODE_REPOSITORY.MainActivity);
+            javaPkg.file("ScreenCaptureService.kt", CODE_REPOSITORY.ScreenCaptureService);
+            javaPkg.file("TileDeltaEngine.kt", CODE_REPOSITORY.TileDeltaEngine);
+            javaPkg.file("BleMirrorManager.kt", CODE_REPOSITORY.BleMirrorManager);
+
+            // XML Resources
+            const resLayout = srcMain.folder("res/layout");
+            resLayout.file("activity_main.xml", CODE_REPOSITORY.ActivityLayout);
+
+            const resValues = srcMain.folder("res/values");
+            resValues.file("strings.xml", `<resources>\n    <string name="app_name">ChronoSync BLE</string>\n</resources>`);
+            resValues.file("themes.xml", `<resources>\n    <style name="Theme.MaterialComponents.DayNight.NoActionBar" parent="Theme.MaterialComponents.DayNight.NoActionBar">\n    </style>\n</resources>`);
+
+            // GitHub Actions Workflow for automated 1-click cloud APK build
+            const workflows = zip.folder(".github/workflows");
+            workflows.file("build-apk.yml", CODE_REPOSITORY.GithubWorkflow);
+
+            // Watch MRE C Receiver Firmware
+            const mreFirmware = zip.folder("mre_firmware");
+            mreFirmware.file("mre_watch_receiver.c", CODE_REPOSITORY.MreReceiver);
+            mreFirmware.file("README_MRE.txt", `Target Watch: MediaTek BL6133 / GL6113 / MX6XM-1.44\nBranch: 11BW1308MP\nMRE Version: 3100\nCompile with MTK MRE SDK & ARM RVDS.\n`);
+
+            const content = await zip.generateAsync({ type: "blob" });
+            const url = URL.createObjectURL(content);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = "ChronoSync-BLE-Android-Project.zip";
+            a.click();
+            URL.revokeObjectURL(url);
+            showToast("Project ZIP downloaded! Ready to build APK.", "🚀");
+        }
+    }
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_1_8
+        targetCompatibility = JavaVersion.VERSION_1_8
+    }
+    kotlinOptions {
+        jvmTarget = "1.8"
+    }
+}
+
+dependencies {
+    implementation("androidx.core:core-ktx:1.12.0")
+    implementation("androidx.appcompat:appcompat:1.6.1")
+    implementation("com.google.android.material:material:1.11.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
+}`
+        };
+
+        function displayCodeFile(fileName) {
+            document.querySelectorAll('.code-tab-btn').forEach(btn => {
+                btn.className = 'code-tab-btn px-3 py-1.5 rounded bg-cyber-card text-cyber-muted border border-cyber-border font-mono';
+            });
+            if (event && event.target) {
+                event.target.className = 'code-tab-btn px-3 py-1.5 rounded bg-cyber-card text-cyber-primary border border-cyber-border font-mono active font-bold';
+            }
+            currentViewingFile = fileName;
+            document.getElementById('codeViewerText').textContent = CODE_REPOSITORY[fileName] || '// File not found';
+        }
+
+        let currentViewingFile = 'ScreenCaptureService';
+        function copyCurrentCodeSnippet() {
+            const text = CODE_REPOSITORY[currentViewingFile] || '';
+            const temp = document.createElement('textarea');
+            temp.value = text;
+            document.body.appendChild(temp);
+            temp.select();
+            document.execCommand('copy');
+            document.body.removeChild(temp);
+            showToast(`Copied ${currentViewingFile} to clipboard!`, '📋');
+        }
+
+        // Initialize with Test Pattern Active
+        window.addEventListener('load', () => {
+            toggleDemoSignal();
+            displayCodeFile('ScreenCaptureService');
+        });
+    </script>
+</body>
+</html>
